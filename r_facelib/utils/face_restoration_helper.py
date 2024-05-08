@@ -191,7 +191,7 @@ class FaceRestoreHelper(object):
             self.all_landmarks_5.append(landmark)
             self.det_faces.append(bbox[0:5])
             
-        logger.info(f"Faces detected = {len(self.det_faces)}")
+        logger.status(f"Faces detected = {len(self.det_faces)}")
 
         if len(self.det_faces) == 0:
             return 0
@@ -300,6 +300,11 @@ class FaceRestoreHelper(object):
                 input_img = self.pad_input_imgs[idx]
             else:
                 input_img = self.input_img
+
+            # With this code, we extract the cropped face at native resolution, and then downscale it to 128x128.
+            # After downscaling, we upscale w/ bicubic to self.face_size. This approach avoids upscaling the original
+            # inswapper_128 face twice, and results in significantly better clarity especially with higher face
+            # resolutions!
             cropped_face = cv2.warpAffine(
                 input_img, affine_matrix / scale_factor, [int(i/scale_factor) for i in self.face_size],
                 borderMode=border_mode, borderValue=(135, 133, 132), flags=cv2.INTER_NEAREST)  # gray
@@ -309,7 +314,7 @@ class FaceRestoreHelper(object):
             save_image(cropped_face, "downscaled-cropped")
             cropped_face = cv2.resize(cropped_face, self.face_size, interpolation=cv2.INTER_CUBIC)
             self.cropped_faces.append(cropped_face)
-            save_image(cropped_face, "cropped")
+            save_image(cropped_face, "fullsize-cropped")
 
             # save the cropped face
             if save_cropped_path is not None:
@@ -421,7 +426,6 @@ class FaceRestoreHelper(object):
                                    int(2 * self.upscale_factor * 10)), np.uint8))
             pasted_face = inv_mask_erosion[:, :, None] * inv_restored
             total_face_area = np.sum(inv_mask_erosion)  # // 3
-            logger.status(f"total face area = {total_face_area}")
             # add border
             if draw_box:
                 h, w = face_size
@@ -456,9 +460,12 @@ class FaceRestoreHelper(object):
                 MASK_COLORMAP = [0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 255, 0, 0, 0]
                 for idx, color in enumerate(MASK_COLORMAP):
                     parse_mask[out == idx] = color
-                #  blur the mask
-                parse_mask = cv2.dilate(parse_mask, np.ones((w_edge, w_edge), np.uint8))
-                parse_mask = cv2.GaussianBlur(parse_mask, (101, 101), 11)
+                # blur the mask
+                # Since Reactor Masking Helper is a thing, we'd rather be more liberal with the masking area to maintain
+                # clarity on face edges
+                parse_mask = cv2.dilate(parse_mask, np.ones((12, 12), np.uint8))
+                parse_mask = cv2.GaussianBlur(parse_mask, (11, 11), 11)
+
                 # remove the black borders
                 thres = 10
                 parse_mask[:thres, :] = 0
@@ -479,7 +486,6 @@ class FaceRestoreHelper(object):
                 upsample_img = inv_soft_mask * pasted_face + (1 - inv_soft_mask) * upsample_img[:, :, 0:3]
                 upsample_img = np.concatenate((upsample_img, alpha), axis=2)
             else:
-                logger.status(f"no alpha")
                 upsample_img = inv_soft_mask * pasted_face + (1 - inv_soft_mask) * upsample_img
                 save_image(inv_soft_mask * pasted_face, "pasted face")
 

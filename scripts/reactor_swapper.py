@@ -196,7 +196,7 @@ def in_swap(img, bgr_fake, M, aimg):
     save_image(bgr_fake, "swapped")
 
     scale_factor = np.sqrt(sum([np.square(M[0][0]), np.square(M[1][0])]))
-    logger.status(f"M scale = {scale_factor}")
+    logger.info(f"M scale = {scale_factor}")
 
     target_img = img
     fake_diff = bgr_fake.astype(np.float32) - aimg.astype(np.float32)
@@ -207,6 +207,8 @@ def in_swap(img, bgr_fake, M, aimg):
     fake_diff[:, -2:] = 0
     IM = cv2.invertAffineTransform(M)
     img_white = np.full((aimg.shape[0], aimg.shape[1]), 255, dtype=np.float32)
+
+    # We use NEAREST interpolation here to allow for lossless downsampling in the face restoration step
     bgr_fake = cv2.warpAffine(bgr_fake, IM, (target_img.shape[1], target_img.shape[0]), borderValue=0.0,
                               flags=cv2.INTER_NEAREST)
     img_white = cv2.warpAffine(img_white, IM, (target_img.shape[1], target_img.shape[0]), borderValue=0.0,
@@ -376,7 +378,6 @@ def swap_face(
                         target_face, wrong_gender = get_face_single(target_img, target_faces, face_index=face_num, gender_target=gender_target, order=faces_order[0])
                         if target_face is not None and wrong_gender == 0:
                             logger.status(f"Swapping...")
-                            logger.status(f"source face = {source_face.shape}")
                             aimg, _ = face_align.norm_crop2(result, target_face.kps, 128)
                             bgr_fake, m = face_swapper.get(result, target_face, source_face, paste_back=False)
                             result, M_scale = in_swap(result, bgr_fake, m, aimg)
