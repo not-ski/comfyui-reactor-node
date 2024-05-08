@@ -308,13 +308,13 @@ class FaceRestoreHelper(object):
             cropped_face = cv2.warpAffine(
                 input_img, affine_matrix / scale_factor, [int(i/scale_factor) for i in self.face_size],
                 borderMode=border_mode, borderValue=(135, 133, 132), flags=cv2.INTER_NEAREST)  # gray
-            save_image(cropped_face, "test-cropped")
+            save_image(cropped_face, "test-cropped") # TODO: Remove
             cropped_face = cv2.resize(cropped_face, (0,0), fx=M_SCALES[idx], fy=M_SCALES[idx],
                                       interpolation=cv2.INTER_AREA)
-            save_image(cropped_face, "downscaled-cropped")
+            save_image(cropped_face, "downscaled-cropped") # TODO: Remove
             cropped_face = cv2.resize(cropped_face, self.face_size, interpolation=cv2.INTER_CUBIC)
             self.cropped_faces.append(cropped_face)
-            save_image(cropped_face, "fullsize-cropped")
+            save_image(cropped_face, "fullsize-cropped") # TODO: Remove
 
             # save the cropped face
             if save_cropped_path is not None:
@@ -328,6 +328,11 @@ class FaceRestoreHelper(object):
                 self.scale_factor.append(scale_factor)
             else:
                 self.scale_factor.append(None)
+
+                # If the original face is larger than the model's face size, then the restored face will need to be
+                # upscaled when pasting back into the image. This is undesirable, since face restoration is already a
+                # form of upscaling. It's generally preferable to use a face restoration model that is (minimally)
+                # larger than the face being restored.
                 logger.status(f"Face is larger than model face size; consider switching to a larger restoration model!")
 
             self.affine_matrices.append(affine_matrix)
@@ -370,10 +375,13 @@ class FaceRestoreHelper(object):
         inv_mask_borders = []
         for restored_face, inverse_affine, scale_factor, f_s in zip(self.restored_faces, self.inverse_affine_matrices,
                                                                self.scale_factor, self.face_sizes):
+
+            # With large restored faces, we want to downscale them first with INTER_AREA to avoid oversharpening
             if scale_factor and scale_factor > 1:
                 restored_face = cv2.resize(restored_face, (0,0), fx=1/scale_factor, fy=1/scale_factor,
                                            interpolation=cv2.INTER_AREA)
             save_image(restored_face, "downscaled_restore")
+
             if face_upsampler is not None:
                 restored_face = face_upsampler.enhance(restored_face, outscale=self.upscale_factor)[0]
                 inverse_affine /= self.upscale_factor
@@ -446,9 +454,10 @@ class FaceRestoreHelper(object):
 
             # parse mask
             if self.use_parse:
-                # inference
+                # inference, downscale the face with INTER_AREA to retain information while avoiding oversharpening
                 face_input = cv2.resize(restored_face, (512, 512), interpolation=cv2.INTER_AREA)
-                save_image(face_input, "downscaled_area")
+                save_image(face_input, "downscaled_area") # TODO: Remove
+
                 face_input = img2tensor(face_input.astype('float32') / 255., bgr2rgb=True, float32=True)
                 normalize(face_input, (0.5, 0.5, 0.5), (0.5, 0.5, 0.5), inplace=True)
                 face_input = torch.unsqueeze(face_input, 0).to(self.device)
@@ -479,7 +488,6 @@ class FaceRestoreHelper(object):
                 # pasted_face = inv_restored
                 fuse_mask = (inv_soft_parse_mask<inv_soft_mask).astype('int')
                 inv_soft_mask = inv_soft_parse_mask*fuse_mask + inv_soft_mask*(1-fuse_mask)
-                save_image(inv_soft_mask, "inv soft mask")
 
             if len(upsample_img.shape) == 3 and upsample_img.shape[2] == 4:  # alpha channel
                 alpha = upsample_img[:, :, 3:]
@@ -487,7 +495,7 @@ class FaceRestoreHelper(object):
                 upsample_img = np.concatenate((upsample_img, alpha), axis=2)
             else:
                 upsample_img = inv_soft_mask * pasted_face + (1 - inv_soft_mask) * upsample_img
-                save_image(inv_soft_mask * pasted_face, "pasted face")
+                save_image(inv_soft_mask * pasted_face, "pasted face") # TODO: Remove
 
         if np.max(upsample_img) > 256:  # 16-bit image
             upsample_img = upsample_img.astype(np.uint16)
