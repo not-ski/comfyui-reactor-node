@@ -140,13 +140,14 @@ class reactor:
             "hidden": {"faces_order": "FACES_ORDER"},
         }
 
-    RETURN_TYPES = ("IMAGE","FACE_MODEL")
+    RETURN_TYPES = ("IMAGE","FACE_MODEL","IMAGE")
     FUNCTION = "execute"
     CATEGORY = "🌌 ReActor"
 
     def __init__(self):
         self.face_helper = None
         self.faces_order = ["large-small", "large-small"]
+        self.faceSize = 512
 
     def restore_face(
             self,
@@ -161,7 +162,7 @@ class reactor:
 
         if face_restore_model != "none" and not model_management.processing_interrupted():
 
-            logger.status(f"Restoring with {face_restore_model}")
+            logger.status(f"Restoring with {face_restore_model} and {facedetection}")
 
             model_path = folder_paths.get_full_path("facerestore_models", face_restore_model)
 
@@ -191,9 +192,17 @@ class reactor:
                 sd = comfy.utils.load_torch_file(model_path, safe_load=True)
                 facerestore_model = model_loading.load_state_dict(sd).eval()
                 facerestore_model.to(device)
+
+            faceSize = 512
+            if "1024" in face_restore_model.lower():
+                faceSize = 1024
+            elif "2048" in face_restore_model.lower():
+                faceSize = 2048
             
-            if self.face_helper is None:
-                self.face_helper = FaceRestoreHelper(1, face_size=512, crop_ratio=(1, 1), det_model=facedetection, save_ext='png', use_parse=True, device=device)
+            logger.status(f"faceSize = {faceSize}")
+            if self.faceSize != faceSize or self.face_helper is None:
+                self.face_helper = FaceRestoreHelper(1, face_size=faceSize, crop_ratio=(1, 1), det_model=facedetection, save_ext='png', use_parse=True, device=device)
+                self.faceSize = faceSize
 
             image_np = 255. * result.cpu().numpy()
 
@@ -272,7 +281,11 @@ class reactor:
                 restored_img = restored_img[:, :, ::-1]
 
                 if original_resolution != restored_img.shape[0:2]:
-                    restored_img = cv2.resize(restored_img, (0, 0), fx=original_resolution[1]/restored_img.shape[1], fy=original_resolution[0]/restored_img.shape[0], interpolation=cv2.INTER_LINEAR)
+                    logger.status(f"{original_resolution} vs {restored_img.shape[0:2]}")
+                    restored_img = cv2.resize(restored_img, (0, 0),
+                                              fx=original_resolution[1]/restored_img.shape[1],
+                                              fy=original_resolution[0]/restored_img.shape[0],
+                                              interpolation=cv2.INTER_AREA)
 
                 self.face_helper.clean_all()
 
@@ -283,7 +296,11 @@ class reactor:
 
             result = restored_img_tensor
 
-        return result
+            restored_face = restored_face[:, :, ::-1]
+            restored_face_np = np.array([restored_face]).astype(np.float32) / 255.0
+            result_face = torch.from_numpy(restored_face_np)
+
+        return result, result_face
     
     def execute(self, enabled, input_image, swap_model, detect_gender_source, detect_gender_input, source_faces_index, input_faces_index, console_log_level, face_restore_model, face_restore_visibility, codeformer_weight, facedetection, source_image=None, face_model=None, faces_order=None):
 
@@ -330,9 +347,9 @@ class reactor:
         else:
             face_model_to_provide = face_model
         
-        result = reactor.restore_face(self,result,face_restore_model,face_restore_visibility,codeformer_weight,facedetection)
+        result, restored_face = reactor.restore_face(self,result,face_restore_model,face_restore_visibility,codeformer_weight,facedetection)
 
-        return (result,face_model_to_provide)
+        return (result,face_model_to_provide,restored_face)
 
 
 class ReActorPlusOpt:
@@ -608,6 +625,7 @@ class RestoreFace:
 
     def __init__(self):
         self.face_helper = None
+        self.faceSize = 512
 
     def execute(self, image, model, visibility, codeformer_weight, facedetection):
         result = reactor.restore_face(self,image,model,visibility,codeformer_weight,facedetection)
