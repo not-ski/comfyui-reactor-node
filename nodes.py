@@ -93,7 +93,9 @@ def get_restorers():
             "https://huggingface.co/datasets/Gourieff/ReActor/resolve/main/models/facerestore_models/GFPGANv1.3.pth",
             "https://huggingface.co/datasets/Gourieff/ReActor/resolve/main/models/facerestore_models/GFPGANv1.4.pth",
             "https://huggingface.co/datasets/Gourieff/ReActor/resolve/main/models/facerestore_models/codeformer-v0.1.0.pth",
-            "https://huggingface.co/datasets/Gourieff/ReActor/resolve/main/models/facerestore_models/GPEN-BFR-512.onnx"
+            "https://huggingface.co/datasets/Gourieff/ReActor/resolve/main/models/facerestore_models/GPEN-BFR-512.onnx",
+            "https://github.com/facefusion/facefusion-assets/releases/download/models/gpen_bfr_1024.onnx",
+            "https://github.com/facefusion/facefusion-assets/releases/download/models/gpen_bfr_2048.onnx",
         ]
         for model_url in fr_urls:
             model_name = os.path.basename(model_url)
@@ -140,7 +142,7 @@ class reactor:
             "hidden": {"faces_order": "FACES_ORDER"},
         }
 
-    RETURN_TYPES = ("IMAGE","FACE_MODEL","IMAGE")
+    RETURN_TYPES = ("IMAGE","FACE_MODEL","IMAGE") # TODO: Remove restored_face return
     FUNCTION = "execute"
     CATEGORY = "🌌 ReActor"
 
@@ -193,6 +195,7 @@ class reactor:
                 facerestore_model = model_loading.load_state_dict(sd).eval()
                 facerestore_model.to(device)
 
+            # Add support for 1024 and 2048 restoration models
             faceSize = 512
             if "1024" in face_restore_model.lower():
                 faceSize = 1024
@@ -282,6 +285,9 @@ class reactor:
 
                 if original_resolution != restored_img.shape[0:2]:
                     logger.status(f"{original_resolution} vs {restored_img.shape[0:2]}")
+
+                    # Use INTER_AREA for less aliased downsampling.
+                    # Upscaling the base image in the restoration step should never be necessary, though!
                     restored_img = cv2.resize(restored_img, (0, 0),
                                               fx=original_resolution[1]/restored_img.shape[1],
                                               fy=original_resolution[0]/restored_img.shape[0],
@@ -296,11 +302,12 @@ class reactor:
 
             result = restored_img_tensor
 
+            # TODO: Remove
             restored_face = restored_face[:, :, ::-1]
             restored_face_np = np.array([restored_face]).astype(np.float32) / 255.0
             result_face = torch.from_numpy(restored_face_np)
 
-        return result, result_face
+        return result, result_face # TODO: Remove result_face from return statement
     
     def execute(self, enabled, input_image, swap_model, detect_gender_source, detect_gender_input, source_faces_index, input_faces_index, console_log_level, face_restore_model, face_restore_visibility, codeformer_weight, facedetection, source_image=None, face_model=None, faces_order=None):
 

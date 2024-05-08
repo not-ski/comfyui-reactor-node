@@ -352,7 +352,7 @@ class FaceRestoreHelper(object):
 
 
     def add_restored_face(self, face):
-        save_image(face, "restored")
+        save_image(face, "restored") # TODO: Remove
         self.restored_faces.append(face)
 
 
@@ -395,6 +395,9 @@ class FaceRestoreHelper(object):
                     extra_offset = 0
                 inverse_affine[:, 2] += extra_offset
                 face_size = f_s
+
+            # If scale_factor > 1 then the inverse_affine has a scaling factor of 1, so no interpolation is needed.
+            # However, if scale_factor < 1 then the restored face needs to be upscaled, so we use INTER_CUBIC.
             inv_restored = cv2.warpAffine(restored_face, inverse_affine, (w_up, h_up), flags=cv2.INTER_CUBIC)
             save_image(inv_restored, "inv_restored")
 
@@ -469,6 +472,7 @@ class FaceRestoreHelper(object):
                 MASK_COLORMAP = [0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 255, 0, 0, 0]
                 for idx, color in enumerate(MASK_COLORMAP):
                     parse_mask[out == idx] = color
+
                 # blur the mask
                 # Since Reactor Masking Helper is a thing, we'd rather be more liberal with the masking area to maintain
                 # clarity on face edges
@@ -495,6 +499,7 @@ class FaceRestoreHelper(object):
                 upsample_img = np.concatenate((upsample_img, alpha), axis=2)
             else:
                 upsample_img = inv_soft_mask * pasted_face + (1 - inv_soft_mask) * upsample_img
+
                 save_image(inv_soft_mask * pasted_face, "pasted face") # TODO: Remove
 
         if np.max(upsample_img) > 256:  # 16-bit image

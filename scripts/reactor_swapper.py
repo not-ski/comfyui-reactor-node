@@ -71,7 +71,7 @@ TARGET_FACES_LIST = []
 TARGET_IMAGE_LIST_HASH = []
 M_SCALES = []
 
-def get_m_scales():
+def get_m_scales(): #TODO: Figure out a better way to pass M_scales to face_restoration_helper
     global M_SCALES
     return M_SCALES
 
@@ -155,9 +155,12 @@ def half_det_size(det_size):
 def analyze_faces(img_data: np.ndarray, det_size=(640, 640)):
     face_analyser = getAnalysisModel(det_size)
     faces = face_analyser.get(img_data)
+
+    # Try halving det_size if no faces are found
     if len(faces) == 0 and det_size[0] > 320 and det_size[1] > 320:
         det_size_half = half_det_size(det_size)
         return analyze_faces(img_data, det_size_half)
+
     return faces
 
 def get_face_single(img_data: np.ndarray, face, face_index=0, det_size=(640, 640), gender_source=0, gender_target=0, order="large-small"):
@@ -195,9 +198,13 @@ def in_swap(img, bgr_fake, M, aimg):
     save_image(aimg, "aimg")
     save_image(bgr_fake, "swapped")
 
+    # The scale factor of the affine matrix is relevant here, because we use different face detection models for the
+    # swapping and restoring steps. This will allow us to maintain 1:1 scaling in the downsampling step of restoration
+    # even though the face is cropped differently!
     scale_factor = np.sqrt(sum([np.square(M[0][0]), np.square(M[1][0])]))
     logger.info(f"M scale = {scale_factor}")
 
+    # Unmodified code; do not touch!
     target_img = img
     fake_diff = bgr_fake.astype(np.float32) - aimg.astype(np.float32)
     fake_diff = np.abs(fake_diff).mean(axis=2)
@@ -216,8 +223,9 @@ def in_swap(img, bgr_fake, M, aimg):
     fake_diff = cv2.warpAffine(fake_diff, IM, (target_img.shape[1], target_img.shape[0]), borderValue=0.0,
                                flags=cv2.INTER_NEAREST)
 
-    save_image(bgr_fake, "bgr_fake")
+    save_image(bgr_fake, "bgr_fake") # TODO: Remove
 
+    # Unmodified code; do not touch!
     img_white[img_white > 20] = 255
     fthresh = 10
     fake_diff[fake_diff < fthresh] = 0
@@ -250,7 +258,8 @@ def in_swap(img, bgr_fake, M, aimg):
     img_mask = np.reshape(img_mask, [img_mask.shape[0], img_mask.shape[1], 1])
     fake_merged = img_mask * bgr_fake + (1 - img_mask) * target_img.astype(np.float32)
     fake_merged = fake_merged.astype(np.uint8)
-    return fake_merged, scale_factor
+
+    return fake_merged, scale_factor # return scale factor along with the swapped image
 
 
 def swap_face(
@@ -378,10 +387,16 @@ def swap_face(
                         target_face, wrong_gender = get_face_single(target_img, target_faces, face_index=face_num, gender_target=gender_target, order=faces_order[0])
                         if target_face is not None and wrong_gender == 0:
                             logger.status(f"Swapping...")
+
+                            # This is a convoluted solution to inswapper_128 utilizing bilinear interpolation. I have
+                            # copied the relevant functions to this module and modified them (where pertinent) to
+                            # improve detail retention on the 128x128 swapped face. See in_swap() func for more!
+
                             aimg, _ = face_align.norm_crop2(result, target_face.kps, 128)
                             bgr_fake, m = face_swapper.get(result, target_face, source_face, paste_back=False)
                             result, M_scale = in_swap(result, bgr_fake, m, aimg)
                             M_SCALES.append(M_scale)
+
                         elif wrong_gender == 1:
                             wrong_gender = 0
                             # Keep searching for other faces if wrong gender is detected, enhancement
