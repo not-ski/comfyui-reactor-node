@@ -121,7 +121,7 @@ class reactor:
         return {
             "required": {
                 "enabled": ("BOOLEAN", {"default": True, "label_off": "OFF", "label_on": "ON"}),
-                "input_image": ("IMAGE",),               
+                "input_image": ("IMAGE",),
                 "swap_model": (list(model_names().keys()),),
                 "facedetection": (["retinaface_resnet50", "retinaface_mobile0.25", "YOLOv5l", "YOLOv5n"],),
                 "face_restore_model": (get_model_names(get_restorers),),
@@ -166,7 +166,7 @@ class reactor:
             model_path = folder_paths.get_full_path("facerestore_models", face_restore_model)
 
             device = model_management.get_torch_device()
-            
+
             if "codeformer" in face_restore_model.lower():
                 
                 codeformer_net = ARCH_REGISTRY.get("CodeFormer")(
@@ -195,16 +195,34 @@ class reactor:
             if self.face_helper is None:
                 self.face_helper = FaceRestoreHelper(1, face_size=512, crop_ratio=(1, 1), det_model=facedetection, save_ext='png', use_parse=True, device=device)
 
-            image_np = 255. * result.cpu().numpy()
+            # print(f"result = {result.dtype}")
+            # image_np = 255. * result.cpu().numpy()
+            image_np = 255. * result.numpy()
 
             total_images = image_np.shape[0]
-            out_images = np.ndarray(shape=image_np.shape)
+
+            out_images = []
+
+            # try:
+            #     out_images = np.ndarray(shape=image_np.shape)
+            # except:
+            #     logger.error("Not enough RAM - Reducing data type to float32")
+            #     logger.info("Data type is set to 'float32'")
+            #     try:
+            #         logger.status("Trying again...")
+            #         out_images = np.ndarray(shape=image_np.shape, dtype=np.float32)
+            #     except:
+            #         logger.error("Not enough RAM - Reducing data type to float16")
+            #         logger.info("Data type is set to 'float16'")
+            #         try:
+            #             logger.status("Trying again...")
+            #             out_images = np.ndarray(shape=image_np.shape, dtype=np.float16)
+            #         except Exception as e:
+            #             logger.error("Not enough RAM, canceling...")
+            #             logger.status(f"Interrupted with Exception: {e}")
+            #             return result
 
             for i in range(total_images):
-
-                if state.interrupted or model_management.processing_interrupted():
-                    logger.status("Interrupted by User")
-                    break
 
                 if total_images > 1:
                     logger.status(f"Restoring {i+1}")
@@ -259,10 +277,10 @@ class reactor:
 
                         print(f"\tFailed inference: {error}", file=sys.stderr)
                         restored_face = tensor2img(cropped_face_t, rgb2bgr=True, min_max=(-1, 1))
-                    
+
                     if face_restore_visibility < 1:
                         restored_face = cropped_face * (1 - face_restore_visibility) + restored_face * face_restore_visibility
-                    
+
                     restored_face = restored_face.astype("uint8")
                     self.face_helper.add_restored_face(restored_face)
 
@@ -276,7 +294,12 @@ class reactor:
 
                 self.face_helper.clean_all()
 
-                out_images[i] = restored_img
+                # out_images[i] = restored_img
+                out_images.append(restored_img)
+
+                if state.interrupted or model_management.processing_interrupted():
+                    logger.status("Interrupted by User")
+                    return input_image
 
             restored_img_np = np.array(out_images).astype(np.float32) / 255.0
             restored_img_tensor = torch.from_numpy(restored_img_np)
@@ -284,7 +307,7 @@ class reactor:
             result = restored_img_tensor
 
         return result
-    
+
     def execute(self, enabled, input_image, swap_model, detect_gender_source, detect_gender_input, source_faces_index, input_faces_index, console_log_level, face_restore_model, face_restore_visibility, codeformer_weight, facedetection, source_image=None, face_model=None, faces_order=None):
 
         if faces_order is None:
