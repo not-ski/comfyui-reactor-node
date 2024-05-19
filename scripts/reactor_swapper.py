@@ -16,6 +16,7 @@ except:
     cuda = None
 
 from scripts.reactor_logger import logger
+from r_facelib.utils.face_restoration_helper import test_interps
 from reactor_utils import move_path, get_image_md5hash
 import folder_paths
 import comfy.model_management as model_management
@@ -177,6 +178,45 @@ def get_face_single(img_data: np.ndarray, face, face_index=0, det_size=(640, 640
         return None, 0
 
 
+def in_swap(img, bgr_fake, M):
+    target_img = img
+    IM = cv2.invertAffineTransform(M)
+    img_white = np.full((bgr_fake.shape[0], bgr_fake.shape[1]), 255, dtype=np.float32)
+
+    # test_interps(bgr_fake, (target_img.shape[1], target_img.shape[0]), IM, "bgr_fake")
+    bgr_fake = cv2.warpAffine(bgr_fake, IM, (target_img.shape[1], target_img.shape[0]), borderValue=0.0,
+                              flags=cv2.INTER_CUBIC)
+
+    img_white = cv2.warpAffine(img_white, IM, (target_img.shape[1], target_img.shape[0]), borderValue=0.0)
+    img_white[img_white > 20] = 255
+    img_mask = img_white
+    mask_h_inds, mask_w_inds = np.where(img_mask == 255)
+    mask_h = np.max(mask_h_inds) - np.min(mask_h_inds)
+    mask_w = np.max(mask_w_inds) - np.min(mask_w_inds)
+    mask_size = int(np.sqrt(mask_h * mask_w))
+    k = max(mask_size // 10, 10)
+    # k = max(mask_size//20, 6)
+    # k = 6
+    kernel = np.ones((k, k), np.uint8)
+    img_mask = cv2.erode(img_mask, kernel, iterations=1)
+    kernel = np.ones((2, 2), np.uint8)
+    k = max(mask_size // 20, 5)
+    # k = 3
+    # k = 3
+    kernel_size = (k, k)
+    blur_size = tuple(2 * i + 1 for i in kernel_size)
+    img_mask = cv2.GaussianBlur(img_mask, blur_size, 0)
+    k = 5
+    kernel_size = (k, k)
+    blur_size = tuple(2 * i + 1 for i in kernel_size)
+    img_mask /= 255
+    # img_mask = fake_diff
+    img_mask = np.reshape(img_mask, [img_mask.shape[0], img_mask.shape[1], 1])
+    fake_merged = img_mask * bgr_fake + (1 - img_mask) * target_img.astype(np.float32)
+    fake_merged = fake_merged.astype(np.uint8)
+    return fake_merged
+
+
 def swap_face(
     source_img: Union[Image.Image, None],
     target_img: Image.Image,
@@ -302,7 +342,8 @@ def swap_face(
                         target_face, wrong_gender = get_face_single(target_img, target_faces, face_index=face_num, gender_target=gender_target, order=faces_order[0])
                         if target_face is not None and wrong_gender == 0:
                             logger.status(f"Swapping...")
-                            result = face_swapper.get(result, target_face, source_face)
+                            bgr_fake, M = face_swapper.get(result, target_face, source_face, paste_back=False)
+                            result = in_swap(target_img, bgr_fake, M)
                         elif wrong_gender == 1:
                             wrong_gender = 0
                             # Keep searching for other faces if wrong gender is detected, enhancement

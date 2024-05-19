@@ -48,7 +48,7 @@ from reactor_utils import (
     rgba2rgb_tensor
 )
 from reactor_patcher import apply_patch
-from r_facelib.utils.face_restoration_helper import FaceRestoreHelper
+from r_facelib.utils.face_restoration_helper import FaceRestoreHelper, test_interps
 from r_basicsr.utils.registry import ARCH_REGISTRY
 import scripts.r_archs.codeformer_arch
 import scripts.r_masking.subcore as subcore
@@ -132,6 +132,7 @@ class reactor:
                 "input_faces_index": ("STRING", {"default": "0"}),
                 "source_faces_index": ("STRING", {"default": "0"}),
                 "console_log_level": ([0, 1, 2], {"default": 1}),
+                "restore_largest": ("BOOLEAN", {"default": False,})
             },
             "optional": {
                 "source_image": ("IMAGE",),
@@ -147,6 +148,7 @@ class reactor:
     def __init__(self):
         self.face_helper = None
         self.faces_order = ["large-small", "large-small"]
+        self.face_size = 512
 
     def restore_face(
             self,
@@ -154,7 +156,8 @@ class reactor:
             face_restore_model,
             face_restore_visibility,
             codeformer_weight,
-            facedetection
+            facedetection,
+            restore_largest
         ):
 
         result = input_image
@@ -191,9 +194,18 @@ class reactor:
                 sd = comfy.utils.load_torch_file(model_path, safe_load=True)
                 facerestore_model = model_loading.load_state_dict(sd).eval()
                 facerestore_model.to(device)
-            
-            if self.face_helper is None:
-                self.face_helper = FaceRestoreHelper(1, face_size=512, crop_ratio=(1, 1), det_model=facedetection, save_ext='png', use_parse=True, device=device)
+
+            faceSize = 512
+            if "1024" in face_restore_model.lower():
+                faceSize = 1024
+            elif "2048" in face_restore_model.lower():
+                faceSize = 2048
+
+            if faceSize != self.face_size or self.face_helper is None:
+                self.face_helper = FaceRestoreHelper(1, face_size=faceSize, crop_ratio=(1, 1),
+                                                     det_model=facedetection, save_ext='png', use_parse=True,
+                                                     device=device)
+                self.face_size = faceSize
 
             # print(f"result = {result.dtype}")
             # image_np = 255. * result.cpu().numpy()
@@ -236,7 +248,8 @@ class reactor:
 
                 self.face_helper.clean_all()
                 self.face_helper.read_image(cur_image_np)
-                self.face_helper.get_face_landmarks_5(only_center_face=False, resize=640, eye_dist_threshold=5)
+                self.face_helper.get_face_landmarks_5(only_center_face=False, resize=640, eye_dist_threshold=5,
+                                                      only_keep_largest=restore_largest)
                 self.face_helper.align_warp_face()
 
                 restored_face = None
@@ -287,10 +300,13 @@ class reactor:
                 self.face_helper.get_inverse_affine(None)
 
                 restored_img = self.face_helper.paste_faces_to_input_image()
+                # test_interps(restored_img, (original_resolution[1], original_resolution[0]), name="downscale")
                 restored_img = restored_img[:, :, ::-1]
 
                 if original_resolution != restored_img.shape[0:2]:
-                    restored_img = cv2.resize(restored_img, (0, 0), fx=original_resolution[1]/restored_img.shape[1], fy=original_resolution[0]/restored_img.shape[0], interpolation=cv2.INTER_LINEAR)
+                    restored_img = cv2.resize(restored_img, (0, 0), fx=original_resolution[1]/restored_img.shape[1],
+                                              fy=original_resolution[0]/restored_img.shape[0],
+                                              interpolation=cv2.INTER_AREA)
 
                 self.face_helper.clean_all()
 
@@ -307,8 +323,10 @@ class reactor:
             result = restored_img_tensor
 
         return result
-
-    def execute(self, enabled, input_image, swap_model, detect_gender_source, detect_gender_input, source_faces_index, input_faces_index, console_log_level, face_restore_model, face_restore_visibility, codeformer_weight, facedetection, source_image=None, face_model=None, faces_order=None):
+    
+    def execute(self, enabled, input_image, swap_model, detect_gender_source, detect_gender_input, source_faces_index,
+                input_faces_index, console_log_level, face_restore_model, face_restore_visibility, codeformer_weight,
+                facedetection, restore_largest, source_image=None, face_model=None, faces_order=None):
 
         if faces_order is None:
             faces_order = self.faces_order
@@ -353,7 +371,8 @@ class reactor:
         else:
             face_model_to_provide = face_model
         
-        result = reactor.restore_face(self,result,face_restore_model,face_restore_visibility,codeformer_weight,facedetection)
+        result = reactor.restore_face(self,result,face_restore_model,face_restore_visibility,codeformer_weight,
+                                      facedetection, restore_largest)
 
         return (result,face_model_to_provide)
 
@@ -622,6 +641,7 @@ class RestoreFace:
                 "model": (get_model_names(get_restorers),),
                 "visibility": ("FLOAT", {"default": 1, "min": 0.0, "max": 1, "step": 0.05}),
                 "codeformer_weight": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1, "step": 0.05}),
+                "restore_largest": ("BOOLEAN", {"default": False, }),
             },
         }
 
@@ -631,9 +651,10 @@ class RestoreFace:
 
     def __init__(self):
         self.face_helper = None
+        self.face_size = 512
 
-    def execute(self, image, model, visibility, codeformer_weight, facedetection):
-        result = reactor.restore_face(self,image,model,visibility,codeformer_weight,facedetection)
+    def execute(self, image, model, visibility, codeformer_weight, facedetection, restore_largest):
+        result = reactor.restore_face(self,image,model,visibility,codeformer_weight,facedetection,restore_largest)
         return (result,)
 
 
