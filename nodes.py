@@ -48,7 +48,7 @@ from reactor_utils import (
     rgba2rgb_tensor
 )
 from reactor_patcher import apply_patch
-from r_facelib.utils.face_restoration_helper import FaceRestoreHelper, test_interps
+from r_facelib.utils.face_restoration_helper import FaceRestoreHelper, test_interps, save_image
 from r_basicsr.utils.registry import ARCH_REGISTRY
 import scripts.r_archs.codeformer_arch
 import scripts.r_masking.subcore as subcore
@@ -132,7 +132,8 @@ class reactor:
                 "input_faces_index": ("STRING", {"default": "0"}),
                 "source_faces_index": ("STRING", {"default": "0"}),
                 "console_log_level": ([0, 1, 2], {"default": 1}),
-                "restore_largest": ("BOOLEAN", {"default": False,})
+                "restore_largest": ("BOOLEAN", {"default": False,}),
+                "restore_immediately": ("BOOLEAN", {"default": False})
             },
             "optional": {
                 "source_image": ("IMAGE",),
@@ -171,7 +172,7 @@ class reactor:
             device = model_management.get_torch_device()
 
             if "codeformer" in face_restore_model.lower():
-                
+
                 codeformer_net = ARCH_REGISTRY.get("CodeFormer")(
                     dim_embd=512,
                     codebook_size=1024,
@@ -182,7 +183,7 @@ class reactor:
                 checkpoint = torch.load(model_path)["params_ema"]
                 codeformer_net.load_state_dict(checkpoint)
                 facerestore_model = codeformer_net.eval()
-            
+
             elif ".onnx" in face_restore_model:
 
                 ort_session = set_ort_session(model_path, providers=providers)
@@ -253,7 +254,7 @@ class reactor:
                 self.face_helper.align_warp_face()
 
                 restored_face = None
-                
+
                 for idx, cropped_face in enumerate(self.face_helper.cropped_faces):
 
                     # if ".pth" in face_restore_model:
@@ -262,11 +263,11 @@ class reactor:
                     cropped_face_t = cropped_face_t.unsqueeze(0).to(device)
 
                     try:
-                        
+
                         with torch.no_grad():
 
                             if ".onnx" in face_restore_model: # ONNX models
-                                
+
                                 for ort_session_input in ort_session.get_inputs():
                                     if ort_session_input.name == "input":
                                         cropped_face_prep = prepare_cropped_face(cropped_face)
@@ -274,7 +275,7 @@ class reactor:
                                     if ort_session_input.name == "weight":
                                         weight = np.array([ 1 ], dtype = np.double)
                                         ort_session_inputs[ort_session_input.name] = weight
-                                
+
                                 output = ort_session.run(None, ort_session_inputs)[0][0]
                                 restored_face = normalize_cropped_face(output)
 
@@ -285,7 +286,7 @@ class reactor:
 
                         del output
                         torch.cuda.empty_cache()
-                   
+
                     except Exception as error:
 
                         print(f"\tFailed inference: {error}", file=sys.stderr)
@@ -326,7 +327,8 @@ class reactor:
     
     def execute(self, enabled, input_image, swap_model, detect_gender_source, detect_gender_input, source_faces_index,
                 input_faces_index, console_log_level, face_restore_model, face_restore_visibility, codeformer_weight,
-                facedetection, restore_largest, source_image=None, face_model=None, faces_order=None):
+                facedetection, restore_largest, restore_immediately,
+                source_image=None, face_model=None, faces_order=None):
 
         if faces_order is None:
             faces_order = self.faces_order
@@ -362,6 +364,10 @@ class reactor:
             gender_target=detect_gender_input,
             face_model=face_model,
             faces_order=faces_order,
+            restore_immediately=restore_immediately,
+            face_restore_model=face_restore_model,
+            face_restore_visibility=face_restore_visibility,
+            codeformer_weight=codeformer_weight,
         )
         result = batched_pil_to_tensor(p.init_images)
 
@@ -370,9 +376,10 @@ class reactor:
             face_model_to_provide = current_face_model[0] if (current_face_model is not None and len(current_face_model) > 0) else face_model
         else:
             face_model_to_provide = face_model
-        
-        result = reactor.restore_face(self,result,face_restore_model,face_restore_visibility,codeformer_weight,
-                                      facedetection, restore_largest)
+
+        if not restore_immediately:
+            result = reactor.restore_face(self,result,face_restore_model,face_restore_visibility,codeformer_weight,
+                                        facedetection, restore_largest)
 
         return (result,face_model_to_provide)
 
