@@ -8,6 +8,27 @@ from r_facelib.detection import init_detection_model
 from r_facelib.parsing import init_parsing_model
 from r_facelib.utils.misc import img2tensor, imwrite
 
+from scripts.reactor_logger import logger
+
+
+def save_image(img, name='restored'):
+    path = os.path.splitext('./testing')[0]
+    save_path = f'{path}/{name}.png'
+    logger.status(f"Saving {save_path}")
+    imwrite(img, save_path)
+
+
+def test_interps(img, dsize, affine=[], name=""):
+    for i in range(7):
+        if not len(affine):
+            save_image(cv2.resize(img, dsize, interpolation=i), f"{name}_{i}")
+        else:
+            try:
+                save_image(cv2.warpAffine(img, affine, dsize, flags=i), f"{name}_{i}")
+            except:
+                logger.status(f"unsupported interp")
+    return
+
 
 def get_largest_face(det_faces, h, w):
 
@@ -95,6 +116,8 @@ class FaceRestoreHelper(object):
         self.cropped_faces = []
         self.restored_faces = []
         self.pad_input_imgs = []
+        self.face_sizes = []
+        self.scale_factor = []
 
         if device is None:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -261,7 +284,8 @@ class FaceRestoreHelper(object):
             # use cv2.LMEDS method for the equivalence to skimage transform
             # ref: https://blog.csdn.net/yichxi/article/details/115827338
             affine_matrix = cv2.estimateAffinePartial2D(landmark, self.face_template, method=cv2.LMEDS)[0]
-            self.affine_matrices.append(affine_matrix)
+            scale_factor = np.sqrt(sum([np.square(affine_matrix[0][0]), np.square(affine_matrix[1][0])]))
+
             # warp and crop faces
             if border_mode == 'constant':
                 border_mode = cv2.BORDER_CONSTANT
@@ -274,8 +298,21 @@ class FaceRestoreHelper(object):
             else:
                 input_img = self.input_img
             cropped_face = cv2.warpAffine(
-                input_img, affine_matrix, self.face_size, borderMode=border_mode, borderValue=(135, 133, 132))  # gray
+                input_img, affine_matrix, self.face_size, borderMode=border_mode, borderValue=(135, 133, 132),
+                flags=cv2.INTER_LINEAR)  # gray
+            # test_interps(input_img, self.face_size, affine_matrix, "cropped")
             self.cropped_faces.append(cropped_face)
+            if scale_factor > 1:
+                # self.upscale_factor = np.ceil(scale_factor)
+                logger.status(f"Face scale_factor = {scale_factor}, {self.upscale_factor}")
+            #     affine_matrix /= scale_factor
+            #     self.face_sizes.append([int(i / scale_factor) for i in self.face_size])
+            #     self.scale_factor.append(scale_factor)
+            else:
+                logger.status(f"Model size is smaller than face size; consider using a larger model!")
+            self.scale_factor.append(None)
+            self.face_sizes.append(self.face_size)
+            self.affine_matrices.append(affine_matrix)
             # save the cropped face
             if save_cropped_path is not None:
                 path = os.path.splitext(save_cropped_path)[0]
@@ -296,6 +333,7 @@ class FaceRestoreHelper(object):
 
 
     def add_restored_face(self, face):
+        save_image(face, "restored")
         self.restored_faces.append(face)
 
 
@@ -306,15 +344,20 @@ class FaceRestoreHelper(object):
         if upsample_img is None:
             # simply resize the background
             # upsample_img = cv2.resize(self.input_img, (w_up, h_up), interpolation=cv2.INTER_LANCZOS4)
-            upsample_img = cv2.resize(self.input_img, (w_up, h_up), interpolation=cv2.INTER_LINEAR)
+            upsample_img = cv2.resize(self.input_img, (w_up, h_up), interpolation=cv2.INTER_NEAREST_EXACT)
         else:
+            logger.status(f"using Lanczos...")
             upsample_img = cv2.resize(upsample_img, (w_up, h_up), interpolation=cv2.INTER_LANCZOS4)
 
         assert len(self.restored_faces) == len(
             self.inverse_affine_matrices), ('length of restored_faces and affine_matrices are different.')
         
         inv_mask_borders = []
-        for restored_face, inverse_affine in zip(self.restored_faces, self.inverse_affine_matrices):
+        for restored_face, inverse_affine, scale_factor, f_s in zip(self.restored_faces, self.inverse_affine_matrices,
+                                                                    self.scale_factor, self.face_sizes):
+            # if scale_factor and scale_factor > 1:
+            #     restored_face = cv2.resize(restored_face, (0, 0), fx=1 / scale_factor, fy=1 / scale_factor,
+            #                                interpolation=cv2.INTER_AREA)
             if face_upsampler is not None:
                 restored_face = face_upsampler.enhance(restored_face, outscale=self.upscale_factor)[0]
                 inverse_affine /= self.upscale_factor
@@ -327,8 +370,9 @@ class FaceRestoreHelper(object):
                 else:
                     extra_offset = 0
                 inverse_affine[:, 2] += extra_offset
-                face_size = self.face_size
-            inv_restored = cv2.warpAffine(restored_face, inverse_affine, (w_up, h_up))
+                face_size = f_s
+            inv_restored = cv2.warpAffine(restored_face, inverse_affine, (w_up, h_up), flags=cv2.INTER_LANCZOS4)
+            # test_interps(restored_face, (w_up, h_up), inverse_affine, "inv_restored")
 
             # if draw_box or not self.use_parse:  # use square parse maps
             #     mask = np.ones(face_size, dtype=np.float32)
@@ -375,10 +419,10 @@ class FaceRestoreHelper(object):
                 inv_mask_borders.append(inv_mask_border)
             # compute the fusion edge based on the area of face
             w_edge = int(total_face_area**0.5) // 20
-            erosion_radius = w_edge * 2
+            erosion_radius = w_edge
             inv_mask_center = cv2.erode(inv_mask_erosion, np.ones((erosion_radius, erosion_radius), np.uint8))
-            blur_size = w_edge * 2
-            inv_soft_mask = cv2.GaussianBlur(inv_mask_center, (blur_size + 1, blur_size + 1), 0)
+            blur_size = w_edge if w_edge % 2 != 0 else w_edge + 1
+            inv_soft_mask = cv2.GaussianBlur(inv_mask_center, (blur_size, blur_size), 0)
             if len(upsample_img.shape) == 2:  # upsample_img is gray image
                 upsample_img = upsample_img[:, :, None]
             inv_soft_mask = inv_soft_mask[:, :, None]
@@ -386,7 +430,8 @@ class FaceRestoreHelper(object):
             # parse mask
             if self.use_parse:
                 # inference
-                face_input = cv2.resize(restored_face, (512, 512), interpolation=cv2.INTER_LINEAR)
+                face_input = cv2.resize(restored_face, (512, 512), interpolation=cv2.INTER_AREA)
+                # test_interps(restored_face, (512, 512), name="face-512")
                 face_input = img2tensor(face_input.astype('float32') / 255., bgr2rgb=True, float32=True)
                 normalize(face_input, (0.5, 0.5, 0.5), (0.5, 0.5, 0.5), inplace=True)
                 face_input = torch.unsqueeze(face_input, 0).to(self.device)
@@ -399,8 +444,8 @@ class FaceRestoreHelper(object):
                 for idx, color in enumerate(MASK_COLORMAP):
                     parse_mask[out == idx] = color
                 #  blur the mask
-                parse_mask = cv2.GaussianBlur(parse_mask, (101, 101), 11)
-                parse_mask = cv2.GaussianBlur(parse_mask, (101, 101), 11)
+                parse_mask = cv2.dilate(parse_mask, np.ones((15, 15)))
+                parse_mask = cv2.GaussianBlur(parse_mask, (11, 11), 0)
                 # remove the black borders
                 thres = 10
                 parse_mask[:thres, :] = 0
@@ -421,6 +466,7 @@ class FaceRestoreHelper(object):
                 upsample_img = inv_soft_mask * pasted_face + (1 - inv_soft_mask) * upsample_img[:, :, 0:3]
                 upsample_img = np.concatenate((upsample_img, alpha), axis=2)
             else:
+                save_image(inv_soft_mask * pasted_face, "pasted")
                 upsample_img = inv_soft_mask * pasted_face + (1 - inv_soft_mask) * upsample_img
 
         if np.max(upsample_img) > 256:  # 16-bit image
@@ -453,3 +499,5 @@ class FaceRestoreHelper(object):
         self.inverse_affine_matrices = []
         self.det_faces = []
         self.pad_input_imgs = []
+        self.scale_factor = []
+        self.face_sizes = []
